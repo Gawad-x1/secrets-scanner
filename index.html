@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ماسح الأسرار | Secrets Scanner</title>
+<style>
+  :root{--bg:#0f1419;--card:#1a212b;--tx:#e6edf3;--mut:#8b98a5;--bd:#2d3846;--hi:#f85149;--md:#f0883e;--lo:#d29922;--ac:#2f81f7}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font-family:Tahoma,"Segoe UI",sans-serif;line-height:1.6}
+  .wrap{max-width:860px;margin:0 auto;padding:24px 16px}
+  h1{margin:0 0 4px;font-size:26px} .sub{color:var(--mut);margin-bottom:20px}
+  .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:16px}
+  input{width:100%;padding:12px;border-radius:8px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font-size:15px;direction:ltr;text-align:left}
+  .row{display:flex;gap:8px;flex-wrap:wrap} .row input{flex:1;min-width:220px}
+  button{padding:12px 22px;border:0;border-radius:8px;background:var(--ac);color:#fff;font-size:15px;cursor:pointer;font-family:inherit}
+  button:disabled{opacity:.5;cursor:wait}
+  .small{font-size:13px;color:var(--mut);margin-top:8px}
+  #status{color:var(--mut);margin:8px 0;min-height:24px}
+  .sum{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .pill{padding:6px 14px;border-radius:99px;font-size:14px;border:1px solid var(--bd)}
+  .f{border-right:4px solid var(--bd);padding:10px 12px;margin-bottom:10px;background:var(--bg);border-radius:8px}
+  .f.high{border-color:var(--hi)} .f.medium{border-color:var(--md)} .f.low{border-color:var(--lo)}
+  .f b{display:block} code{direction:ltr;unicode-bidi:embed;background:#0008;padding:2px 6px;border-radius:4px;font-size:13px;word-break:break-all}
+  .fix{color:var(--mut);font-size:14px;margin-top:4px}
+  a{color:var(--ac)} .ok{color:#3fb950;font-size:18px;text-align:center;padding:16px}
+  .actions{display:flex;gap:8px;margin-bottom:12px} .actions button{background:#2d3846;padding:8px 14px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔐 ماسح الأسرار</h1>
+  <div class="sub">فحص ريبو جيت هاب عام بحثاً عن مفاتيح وباسوردات اتنزلت بالغلط. الفحص كله بيتم في متصفحك.</div>
+
+  <div class="card">
+    <div class="row">
+      <input id="repo" placeholder="https://github.com/user/repo  أو  user/repo" />
+      <button id="go">افحص</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <input id="token" type="password" placeholder="GitHub Token (اختياري - يرفع حد الطلبات من 60 لـ 5000 في الساعة)" />
+    </div>
+    <div class="small">الفحص بيشمل آخر 30 commit + ملفات الفرع الأساسي. التوكن بيتبعت لـ api.github.com بس ومش بيتخزن.</div>
+  </div>
+
+  <div id="status"></div>
+  <div id="out"></div>
+</div>
+
+<script>
+const RULES = [
+  ["AWS Access Key ID", /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/, "high", "ألغِ المفتاح من IAM وولّد واحد جديد."],
+  ["Google API Key", /\bAIza[0-9A-Za-z_\-]{35}\b/, "high", "قيّد المفتاح أو احذفه من Google Cloud Console."],
+  ["OpenAI API Key", /\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_\-]{32,}\b/, "high", "احذف المفتاح من platform.openai.com وولّد واحد جديد."],
+  ["Anthropic API Key", /\bsk-ant-[A-Za-z0-9_\-]{40,}\b/, "high", "ألغِ المفتاح من Anthropic Console."],
+  ["SendGrid API Key", /\bSG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}\b/, "high", "ألغِ المفتاح من SendGrid."],
+  ["Discord Bot Token", /\b[MN][A-Za-z\d]{23}\.[\w\-]{6}\.[\w\-]{27,}\b/, "high", "اعمل Reset Token من Discord Developer Portal."],
+  ["NPM Token", /\bnpm_[A-Za-z0-9]{36}\b/, "high", "ألغِ التوكن من npmjs.com."],
+  ["Stripe Live Secret", /\b(?:sk|rk)_live_[0-9a-zA-Z]{24,}\b/, "high", "اعمل roll للمفتاح من Stripe Dashboard فوراً."],
+  ["GitHub Token", /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b/, "high", "ألغِ التوكن من GitHub Settings."],
+  ["GitHub Fine-grained Token", /\bgithub_pat_[A-Za-z0-9_]{50,}\b/, "high", "ألغِ التوكن من GitHub Settings."],
+  ["Telegram Bot Token", /\b\d{8,10}:AA[A-Za-z0-9_\-]{33}\b/, "high", "اعمل /revoke من BotFather."],
+  ["Slack Token", /\bxox[baprs]-[A-Za-z0-9\-]{10,}\b/, "high", "ألغِ التوكن من Slack API."],
+  ["Private Key", /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY(?: BLOCK)?-----/, "high", "اعتبر المفتاح مكشوف: ولّد زوج جديد."],
+  ["Database URL with password", /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s:@\/]+:[^\s:@\/]+@[^\s\/]+/, "high", "غيّر باسورد الداتابيز وخليه في env."],
+  ["JWT (ممكن service_role)", /\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b/, "medium", "لو service_role جدده من Supabase. الـ anon key عادي."],
+  ["Generic secret", /\b(?:api[_-]?key|secret|passw(?:or)?d|token|auth)\w*\s*[:=]\s*['"]([^'"\s]{12,})['"]/i, "medium", "انقل القيمة لمتغير بيئة (env)."],
+];
+const PH = ["example","your_","your-","xxxx","changeme","placeholder","<","${","{{","process.env","os.environ","getenv"];
+const SKIP_EXT = /\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|mp[34]|woff2?|ttf|eot|lock|exe|dll|so|map|min\.js)$/i;
+const SKIP_DIR = /(^|\/)(node_modules|dist|build|\.next|vendor)\//;
+
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const redact = s => s.length <= 8 ? s : s.slice(0,4) + "*".repeat(Math.min(s.length-8,12)) + s.slice(-4);
+function entropy(s){const m={};for(const c of s)m[c]=(m[c]||0)+1;return -Object.values(m).reduce((a,n)=>a+n/s.length*Math.log2(n/s.length),0)}
+
+function scanLine(line){
+  if(line.length>2000) return [];
+  const low=line.toLowerCase(), hits=[];
+  for(const [name,rx,sev,fix] of RULES){
+    const m=line.match(rx); if(!m) continue;
+    let val=m[1]||m[0], nm=name, sv=sev, fx=fix;
+    if(name.startsWith("JWT")){
+      try{const pl=JSON.parse(atob(val.split(".")[1].replace(/-/g,"+").replace(/_/g,"/")));
+        if(pl.role==="anon") continue;
+        if(pl.role==="service_role"){nm="Supabase service_role JWT";sv="high";fx="خطير جداً: جدد الـ JWT secret من Supabase فوراً."}
+      }catch(e){}
+    }
+    if(name==="Generic secret" && (PH.some(p=>low.includes(p)) || entropy(val)<3)) continue;
+    hits.push({name:nm,val,sev:sv,fix:fx});
+  }
+  const specific=hits.filter(h=>h.name!=="Generic secret");
+  return specific.length?specific:hits;
+}
+
+async function gh(path,token){
+  const h={"Accept":"application/vnd.github+json"}; if(token) h.Authorization="Bearer "+token;
+  const r=await fetch("https://api.github.com"+path,{headers:h});
+  if(r.status===404) throw new Error("الريبو مش موجود أو خاص (محتاج توكن).");
+  if(r.status===403||r.status===429) throw new Error("وصلت لحد الطلبات. حط GitHub Token أو استنى شوية.");
+  if(!r.ok) throw new Error("خطأ من GitHub: "+r.status);
+  return r.json();
+}
+
+function parseRepo(v){
+  v=v.trim().replace(/\.git$/,"").replace(/\/$/,"");
+  const m=v.match(/(?:github\.com\/)?([\w.\-]+)\/([\w.\-]+)$/); return m?[m[1],m[2]]:null;
+}
+
+let FINDINGS=[];
+async function run(){
+  const p=parseRepo($("repo").value); if(!p){$("status").textContent="اكتب لينك الريبو صح (user/repo).";return}
+  const [owner,repo]=p, token=$("token").value.trim();
+  $("go").disabled=true; $("out").innerHTML=""; FINDINGS=[];
+  const seen=new Set();
+  const add=(h,file,line,commit)=>{
+    const k=h.name+h.val+file+(commit||""); if(seen.has(k)) return; seen.add(k);
+    FINDINGS.push({type:h.name,severity:h.sev,file,line,commit,secret:redact(h.val),fix:h.fix});
+  };
+  try{
+    $("status").textContent="جاري قراءة الريبو...";
+    const info=await gh(`/repos/${owner}/${repo}`,token);
+    const tree=await gh(`/repos/${owner}/${repo}/git/trees/${info.default_branch}?recursive=1`,token);
+    const files=tree.tree.filter(f=>f.type==="blob"&&f.size<500000&&!SKIP_EXT.test(f.path)&&!SKIP_DIR.test(f.path)).slice(0,150);
+    let i=0;
+    for(const f of files){
+      $("status").textContent=`فحص الملفات ${++i}/${files.length}: ${f.path}`;
+      try{
+        const r=await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${info.default_branch}/${f.path.split("/").map(encodeURIComponent).join("/")}`);
+        if(!r.ok) continue;
+        (await r.text()).split("\n").forEach((l,n)=>scanLine(l).forEach(h=>add(h,f.path,n+1,null)));
+      }catch(e){}
+    }
+    $("status").textContent="جاري فحص تاريخ الـ commits...";
+    const commits=await gh(`/repos/${owner}/${repo}/commits?per_page=30`,token);
+    let c=0;
+    for(const cm of commits){
+      $("status").textContent=`فحص commit ${++c}/${commits.length}`;
+      const d=await gh(`/repos/${owner}/${repo}/commits/${cm.sha}`,token);
+      for(const f of d.files||[]){
+        if(!f.patch||SKIP_EXT.test(f.filename)) continue;
+        let ln=0;
+        for(const l of f.patch.split("\n")){
+          const hm=l.match(/^@@ .*\+(\d+)/);
+          if(hm){ln=+hm[1]-1;continue}
+          if(l.startsWith("-")) continue;
+          ln++;
+          if(l.startsWith("+")) scanLine(l.slice(1)).forEach(h=>add(h,f.filename,ln,cm.sha.slice(0,8)));
+        }
+      }
+    }
+    FINDINGS.sort((a,b)=>({high:0,medium:1,low:2}[a.severity]-{high:0,medium:1,low:2}[b.severity]));
+    render(); $("status").textContent="خلص الفحص.";
+  }catch(e){$("status").textContent="❌ "+e.message}
+  $("go").disabled=false;
+}
+
+function render(){
+  const cnt=s=>FINDINGS.filter(f=>f.severity===s).length;
+  const lbl={high:"🔴 عالية",medium:"🟠 متوسطة",low:"🟡 منخفضة"};
+  if(!FINDINGS.length){$("out").innerHTML='<div class="card ok">✅ مفيش أسرار ظاهرة. (الفحص تقريبي ومش بيغني عن مراجعة يدوية)</div>';return}
+  let h=`<div class="card"><div class="sum"><span class="pill">الإجمالي: ${FINDINGS.length}</span><span class="pill">🔴 ${cnt("high")}</span><span class="pill">🟠 ${cnt("medium")}</span><span class="pill">🟡 ${cnt("low")}</span></div>
+  <div class="actions"><button onclick="dl()">تحميل JSON</button><button onclick="window.print()">طباعة / PDF</button></div>`;
+  for(const f of FINDINGS){
+    h+=`<div class="f ${f.severity}"><b>${lbl[f.severity]} — ${esc(f.type)}</b>
+    الملف: <code>${esc(f.file)}:${f.line}</code>${f.commit?` | commit: <code>${f.commit}</code>`:""}<br>
+    القيمة: <code>${esc(f.secret)}</code><div class="fix">الحل: ${esc(f.fix)}</div></div>`;
+  }
+  h+=`<div class="small">لو السر ظهر في commit قديم: ألغِ المفتاح الأول، وبعدين نضّف التاريخ بـ <code>git filter-repo</code>.</div></div>`;
+  $("out").innerHTML=h;
+}
+function dl(){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(FINDINGS,null,2)],{type:"application/json"}));a.download="secrets-report.json";a.click()}
+$("go").onclick=run; $("repo").addEventListener("keydown",e=>{if(e.key==="Enter")run()});
+</script>
+</body>
+</html>
